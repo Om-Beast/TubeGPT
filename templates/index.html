@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TubeGPT</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-content">
+        <div class="logo">
+          <img class="logo-img" src="{{ url_for('static', filename='favicon.svg') }}" alt="TubeGPT Logo">
+          <div>
+            <h1>TubeGPT</h1>
+            <p>Ask questions about any YouTube video using its transcript</p>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="video-panel card">
+        <h2>Load Video</h2>
+        <p class="hint">Paste a YouTube URL or video ID to index the transcript.</p>
+        <form id="load-form" class="load-form">
+          <input
+            type="text"
+            id="video-input"
+            placeholder="https://www.youtube.com/watch?v=Gfr50f6ZBvo"
+            autocomplete="off"
+            required
+          >
+          <button type="submit" id="load-btn">Load Video</button>
+        </form>
+        <div id="video-status" class="status hidden"></div>
+      </section>
+
+      <section class="chat-panel card">
+        <div class="chat-header">
+          <h2>Chat</h2>
+          <span id="chat-badge" class="badge badge-idle">No video loaded</span>
+        </div>
+
+        <div id="chat-messages" class="chat-messages">
+          <div class="message bot">
+            <div class="bubble">
+              Load a YouTube video above, then ask anything about its content.
+              <br><br>
+              Try: <em>"Can you summarize the video?"</em> or
+              <em>"What topics are discussed?"</em>
+            </div>
+          </div>
+        </div>
+
+        <form id="chat-form" class="chat-form">
+          <input
+            type="text"
+            id="question-input"
+            placeholder="Ask a question about the video..."
+            autocomplete="off"
+            disabled
+          >
+          <button type="submit" id="send-btn" disabled>
+            <span>Send</span>
+          </button>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
