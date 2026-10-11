@@ -11,6 +11,7 @@ from flask import Flask, jsonify, render_template, request
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from werkzeug.middleware.proxy_fix import ProxyFix
 from youtube_transcript_api import TranscriptsDisabled, YouTubeTranscriptApi
 from youtube_transcript_api._errors import (
     CouldNotRetrieveTranscript,
@@ -20,12 +21,24 @@ from youtube_transcript_api._errors import (
 )
 
 from rag_core import build_timestamped_chunks, extract_video_id, format_timestamp
+from rate_limiter import SlidingWindowRateLimiter
 
 load_dotenv()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 12 * 1024
 app.config["JSON_SORT_KEYS"] = False
+
+# Render terminates HTTPS and forwards client IP information through one trusted
+# proxy hop. Set TRUST_PROXY_HOPS=0 when running directly or behind no trusted proxy.
+TRUST_PROXY_HOPS = max(0, int(os.getenv("TRUST_PROXY_HOPS", "1")))
+if TRUST_PROXY_HOPS:
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=TRUST_PROXY_HOPS,
+        x_proto=TRUST_PROXY_HOPS,
+        x_host=0,
+    )
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("tubegpt")
@@ -37,6 +50,11 @@ MAX_QUESTION_CHARS = 1500
 TOP_K = 4
 CHUNK_SIZE = 1400
 CHUNK_OVERLAP = 180
+RATE_LIMIT_RULES = {
+    "/api/load-video": (4, "video indexing"),
+    "/api/chat": (20, "questions"),
+}
+_RATE_LIMITER = SlidingWindowRateLimiter(window_seconds=60.0, max_keys=5000)
 
 # Process-local LRU cache. A restart clears it; multiple workers have separate caches.
 _INDEX_CACHE: OrderedDict[str, dict] = OrderedDict()
@@ -127,7 +145,8 @@ def _get_or_create_index(video_id: str):
         "language": language,
         "chunk_count": len(chunks),
         "transcript_chars": transcript_chars,
-        "word_count": sum(len(chunk["text"].split()) for chunk in chunks),
+        # Count the original captions, not overlapping chunk text.
+        "word_count": sum(len(str(getattr(item, "text", "") or "").split()) for item in snippets),
     }
 
     with _CACHE_LOCK:
@@ -190,6 +209,25 @@ def _retrieve_sources(vector_store, question: str, video_id: str):
         for source in sources
     )
     return sources, context
+
+
+@app.before_request
+def enforce_api_rate_limits():
+    rule = RATE_LIMIT_RULES.get(request.path)
+    if not rule or request.method != "POST":
+        return None
+
+    limit, action_name = rule
+    client_ip = request.remote_addr or "unknown"
+    retry_after = _RATE_LIMITER.check(client_ip + ":" + request.path, limit)
+    if retry_after is not None:
+        response = jsonify({
+            "error": "Too many " + action_name + " requests. Please wait a moment and try again."
+        })
+        response.status_code = 429
+        response.headers["Retry-After"] = str(retry_after)
+        return response
+    return None
 
 
 @app.after_request
