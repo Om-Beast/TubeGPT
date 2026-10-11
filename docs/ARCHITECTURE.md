@@ -7,11 +7,12 @@ Browser UI → Flask route → transcript/index cache → FAISS retrieval → Ge
 ## Indexing path
 
 1. Validate the user's input and extract an 11-character YouTube video ID from an allow-listed host/path.
-2. Request captions with youtube-transcript-api. Prefer English where available and fall back to an available transcript.
-3. Normalize whitespace and build caption groups up to a character budget. Retain whole-caption overlap and the caption time range.
-4. Convert each chunk to a LangChain Document containing chunk_index, start_seconds, and end_seconds metadata.
-5. Embed the documents and build an in-memory FAISS index.
-6. Insert the index into an OrderedDict LRU cache. Evict the oldest index when the configured cache limit is exceeded.
+2. Request captions with youtube-transcript-api. Prefer English where available and fall back to an available transcript. If the hosting network is blocked, the user can submit pasted transcript text to a separate endpoint.
+3. For pasted text, parse inline timestamp lines or alternating timestamp/caption lines when present. If the user supplies plain text without timestamps, keep it un-timestamped rather than fabricating timing metadata.
+4. Normalize whitespace and build caption groups up to a character budget. Retain whole-caption overlap and the caption time range.
+5. Convert each chunk to a LangChain Document containing chunk_index, start_seconds, end_seconds, and timestamp_available metadata.
+6. Embed the documents and build an in-memory FAISS index.
+7. Insert the index into an OrderedDict LRU cache. Evict the oldest index when the configured cache limit is exceeded.
 
 ## Question path
 
@@ -43,3 +44,8 @@ Similarity distances depend on the embedding model and index configuration. A di
 - The demo does not include account management, durable chat history, a distributed cache, a durable indexing queue, or calibrated retrieval evaluation.
 - The application does not download audio/video or bypass caption access restrictions.
 - The API applies a best-effort in-process rolling-window limit of 4 video-index requests/minute and 20 chat requests/minute per client. Client IP extraction trusts the configured reverse-proxy hop count; use TRUST_PROXY_HOPS=0 when running directly and only trust known proxies. This limiter is process-local and is not a substitute for provider quotas or platform-level controls.
+
+
+## Pasted-transcript fallback
+
+When the hosting network cannot retrieve captions automatically, users can paste accessible caption text from YouTube's own Show transcript panel. The app indexes it through the same chunking, embedding, FAISS and chat path. If timestamp lines are present, they are carried into source metadata. Plain pasted text remains usable, but source cards disclose that exact timestamps were not supplied and link to the video without a fabricated time. This is a resilience fallback, not a method to bypass YouTube's restrictions.

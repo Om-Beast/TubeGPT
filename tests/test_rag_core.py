@@ -1,6 +1,11 @@
 import unittest
 
-from rag_core import build_timestamped_chunks, extract_video_id, format_timestamp
+from rag_core import (
+    build_timestamped_chunks,
+    extract_video_id,
+    format_timestamp,
+    parse_pasted_transcript,
+)
 
 
 class VideoIdTests(unittest.TestCase):
@@ -32,6 +37,41 @@ class TimestampTests(unittest.TestCase):
         self.assertEqual(format_timestamp(3661), "01:01:01")
         self.assertEqual(format_timestamp(-2), "00:00")
         self.assertEqual(format_timestamp(float("nan")), "00:00")
+
+
+class PastedTranscriptTests(unittest.TestCase):
+    def test_parses_inline_timestamps_and_computes_durations(self):
+        snippets, has_timestamps = parse_pasted_transcript(
+            "0:00 Intro to RAG\n0:12 Embeddings map text to vectors\n1:02:03 Longer explanation"
+        )
+        self.assertTrue(has_timestamps)
+        self.assertEqual(len(snippets), 3)
+        self.assertEqual(snippets[0]["start"], 0)
+        self.assertEqual(snippets[0]["duration"], 12)
+        self.assertEqual(snippets[1]["start"], 12)
+        self.assertEqual(snippets[1]["duration"], 61 * 60 + 51)
+        self.assertEqual(snippets[2]["start"], 3723)
+
+    def test_parses_standalone_timestamps_followed_by_caption_lines(self):
+        snippets, has_timestamps = parse_pasted_transcript(
+            "0:00\nHello there\n0:08\nWelcome back"
+        )
+        self.assertTrue(has_timestamps)
+        self.assertEqual([item["text"] for item in snippets], ["Hello there", "Welcome back"])
+        self.assertEqual([item["start"] for item in snippets], [0, 8])
+        self.assertEqual(snippets[0]["duration"], 8)
+
+    def test_unstamped_text_is_returned_without_fake_timestamps(self):
+        snippets, has_timestamps = parse_pasted_transcript("First paragraph\nSecond paragraph")
+        self.assertFalse(has_timestamps)
+        self.assertEqual(len(snippets), 1)
+        self.assertEqual(snippets[0]["text"], "First paragraph Second paragraph")
+        self.assertEqual(snippets[0]["start"], 0)
+
+    def test_empty_transcript_is_rejected_as_empty(self):
+        snippets, has_timestamps = parse_pasted_transcript("  \n \n")
+        self.assertFalse(has_timestamps)
+        self.assertEqual(snippets, [])
 
 
 class ChunkingTests(unittest.TestCase):

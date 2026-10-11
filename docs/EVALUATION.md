@@ -33,3 +33,8 @@ Keep the source transcript and expected evidence manually checked. Do not use mo
 ## Initial baseline
 
 The application currently uses overlapping timestamp-aware caption chunks, FAISS similarity search with top-k = 4, and Gemini for answer generation. No measured retrieval or answer-quality score is published yet.
+
+
+## Manual-transcript mode evaluation
+
+Include the same gold questions in both automatic-caption and pasted-transcript modes. Test both inline timestamped captions and plain text without timestamps. Verify that a timestamped source link points to the expected moment, and that an un-timestamped source is labelled as having no timestamp rather than receiving a misleading 00:00 citation.

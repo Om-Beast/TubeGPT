@@ -51,3 +51,7 @@ Indexes are in process memory and a restart clears them; multiple workers do not
 - The cache is ephemeral and process-local.
 - The model provider may change model availability, latency and pricing.
 - The app is an educational MVP, not a production multi-tenant platform.
+
+
+### Why provide a pasted-transcript fallback?
+The unofficial transcript endpoint can be blocked or rate-limited from some cloud IP addresses. A fallback lets users supply transcript content they can already access from their browser, then reuses the same chunking, embedding, retrieval and generation pipeline. It does not bypass caption access controls. When time codes are absent, the app must disclose that rather than invent timestamp citations.

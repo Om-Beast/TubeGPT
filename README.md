@@ -14,7 +14,8 @@ This is an educational full-stack RAG project, not an official YouTube product. 
 - **Prompt-injection awareness:** transcript text is treated as untrusted quoted data, not as instructions to the assistant.
 - **Real retrieval pipeline:** Google embeddings + FAISS similarity search + Gemini answer generation through LangChain.
 - **Bounded index cache:** the demo keeps a configurable number of video indexes in process memory and evicts the least recently used index.
-- **Defensive API behavior:** validates supported YouTube URL forms, rejects oversized requests/transcripts/questions, avoids returning raw exception details to clients, and uses secure response headers.
+- **Defensive API behavior:** validates supported YouTube URL forms, rejects oversized requests/transcripts/questions, provides best-effort per-client request limits, avoids returning raw exception details to clients, and uses security headers.
+- **Transcript fallback:** if a host cannot retrieve captions, users can paste text from YouTube's Show transcript panel. Timestamp prefixes are parsed and preserved; plain pasted text is supported without pretending it has exact timestamps.
 - **Premium responsive UI:** loading states, question starters, conversation history for the current page, evidence cards, and mobile layouts with no frontend framework or external JavaScript dependencies.
 - **Offline unit tests:** video URL validation, timestamp formatting, and transcript chunking can be tested without Google credentials or network access.
 
@@ -26,7 +27,7 @@ This is an educational full-stack RAG project, not an official YouTube product. 
 4. **Embed:** create a vector for each chunk with Gemini Embedding 2.
 5. **Retrieve:** perform FAISS similarity search for the user's question and select the top matching chunks.
 6. **Generate:** pass only the retrieved excerpts and question to Gemini Flash, with instructions to cite source labels and ignore instructions embedded in transcript text.
-7. **Verify:** render every retrieved source as a clickable card that opens the original video at the start timestamp.
+7. **Verify:** render every retrieved source as a clickable card that opens the original video at the start timestamp when available. Pasted transcript mode explicitly marks timestamps as unavailable when the pasted content lacks them.
 
 ## Stack
 
@@ -100,6 +101,7 @@ All endpoints are same-origin JSON endpoints.
 |---|---|---|
 | GET | /api/health | Liveness check |
 | POST | /api/load-video | Fetch captions, chunk them, embed, and index the video |
+| POST | /api/load-transcript | Index transcript text pasted by the user, preserving parseable timestamps |
 | POST | /api/chat | Retrieve relevant chunks and return an answer plus source metadata |
 
 Example load request:
@@ -114,7 +116,7 @@ Example question request:
       -H "Content-Type: application/json" \
       -d '{"video_id":"Gfr50f6ZBvo","question":"What are the main takeaways?"}'
 
-The chat response contains answer, sources, video_id, and retrieved_count. Each source includes a label, transcript excerpt, start/end seconds, formatted timestamps, and a YouTube timestamp link.
+The chat response contains answer, sources, video_id, and retrieved_count. Each source includes a label, transcript excerpt, timestamp-availability flag, optional start/end seconds, formatted timestamps when present, and a YouTube link. For the fallback endpoint, send JSON with video_url and transcript_text. The transcript may contain inline times (0:12 words) or alternating timestamp/caption lines (0:12 followed by a caption line). If no timestamps are provided, source cards say so instead of inventing exact times.
 
 ## Architecture and trade-offs
 
