@@ -7,6 +7,12 @@
   const loadButton = byId("load-btn");
   const loadLabel = byId("load-btn-label");
   const videoStatus = byId("video-status");
+  const toggleManual = byId("toggle-manual");
+  const manualPanel = byId("manual-transcript-panel");
+  const manualForm = byId("manual-form");
+  const transcriptInput = byId("transcript-input");
+  const manualSubmit = byId("manual-submit");
+  const manualSubmitLabel = byId("manual-submit-label");
   const videoPreview = byId("video-preview");
   const videoThumb = byId("video-thumb");
   const videoIdLabel = byId("video-id-label");
@@ -134,7 +140,10 @@
     const tag = createElement("span", "source-tag", source.id || "SRC");
     const content = createElement("span", "source-content");
     const meta = createElement("span", "source-meta");
-    meta.appendChild(createElement("span", "", (source.start_timestamp || "00:00") + " – " + (source.end_timestamp || "00:00")));
+    const timingLabel = source.timestamp_available === false
+      ? "Timestamp not provided"
+      : (source.start_timestamp || "00:00") + " – " + (source.end_timestamp || "00:00");
+    meta.appendChild(createElement("span", "", timingLabel));
     meta.appendChild(createElement("span", "source-arrow", "↗"));
     content.append(meta, createElement("span", "source-text", source.text || "Open the video to verify this passage."));
     link.append(tag, content);
@@ -164,9 +173,58 @@
     videoIdLabel.textContent = "YouTube video · " + videoId;
     const words = Number(data.word_count || 0).toLocaleString();
     const chunks = Number(data.chunk_count || 0).toLocaleString();
-    videoMeta.textContent = words + " words indexed · " + chunks + " timestamped chunks · " + (data.language || "caption language unknown");
+    const timeInfo = data.timestamp_available === false ? "timestamps not provided" : "timestamps preserved";
+    const inputInfo = data.input_mode === "pasted" ? "pasted transcript" : (data.language || "captions");
+    videoMeta.textContent = words + " words indexed · " + chunks + " chunks · " + timeInfo;
+    videoMeta.title = inputInfo;
     openVideoLink.href = "https://www.youtube.com/watch?v=" + encodeURIComponent(videoId);
   }
+
+  function onIndexSuccess(data) {
+    activeVideoId = data.video_id;
+    updateVideoPreview(data);
+    const chunks = Number(data.chunk_count || 0).toLocaleString();
+    const manual = data.input_mode === "pasted";
+    setStatus(
+      (manual ? "Pasted transcript indexed successfully. " : "Transcript indexed successfully. ")
+        + chunks + " searchable chunks are ready.",
+      "success"
+    );
+    manualPanel.hidden = true;
+    toggleManual.setAttribute("aria-expanded", "false");
+    questionInput.disabled = false;
+    questionInput.placeholder = "Ask about this video… (Enter to send, Shift + Enter for a new line)";
+    sendButton.disabled = false;
+    suggestionButtons.forEach((button) => { button.disabled = false; });
+    chatStatus.textContent = "Index ready";
+    chatStatus.parentElement.classList.add("is-ready");
+    chatSubtitle.textContent = manual
+      ? (data.timestamp_available
+          ? "Evidence from pasted transcript · timestamps preserved"
+          : "Evidence from pasted transcript · no timestamps supplied")
+      : "Answers grounded in " + (data.language || "video") + " captions";
+
+    clearConversation();
+    const intro = manual
+      ? (data.timestamp_available
+          ? "Your pasted transcript is indexed. Ask a question and I’ll retrieve relevant passages with their copied timestamps, then attach source links for verification."
+          : "Your pasted transcript is indexed. Ask a question and I’ll retrieve relevant passages. The source cards link to the video, but exact timestamps were not supplied in the pasted text.")
+      : "Your video is indexed and ready. Ask a question and I’ll search the transcript, answer from the retrieved passages, and attach timestamp links so you can verify the evidence.";
+    appendMessage("assistant", intro, []);
+    questionInput.focus();
+  }
+
+  function revealManualFallback() {
+    manualPanel.hidden = false;
+    toggleManual.setAttribute("aria-expanded", "true");
+  }
+
+  toggleManual.addEventListener("click", () => {
+    const shouldOpen = manualPanel.hidden;
+    manualPanel.hidden = !shouldOpen;
+    toggleManual.setAttribute("aria-expanded", String(shouldOpen));
+    if (shouldOpen) transcriptInput.focus();
+  });
 
   loadForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -181,31 +239,59 @@
     setLoadingVideo(true);
     try {
       const data = await requestJson("/api/load-video", { video_url: videoUrl });
-      activeVideoId = data.video_id;
-      updateVideoPreview(data);
-      setStatus(
-        "Transcript indexed successfully. " + Number(data.chunk_count || 0).toLocaleString() + " searchable chunks are ready.",
-        "success"
-      );
-      questionInput.disabled = false;
-      questionInput.placeholder = "Ask about this video… (Enter to send, Shift + Enter for a new line)";
-      sendButton.disabled = false;
-      suggestionButtons.forEach((button) => { button.disabled = false; });
-      chatStatus.textContent = "Index ready";
-      chatStatus.parentElement.classList.add("is-ready");
-      chatSubtitle.textContent = "Answers grounded in " + (data.language || "video") + " captions";
-
-      clearConversation();
-      appendMessage(
-        "assistant",
-        "Your video is indexed and ready. Ask a question and I’ll search the transcript, answer from the retrieved passages, and attach timestamp links so you can verify the evidence.",
-        []
-      );
-      questionInput.focus();
+      onIndexSuccess(data);
     } catch (error) {
       setStatus(error.message || "Could not index this video.", "error");
+      const message = String(error.message || "").toLowerCase();
+      if (message.includes("transcript") || message.includes("caption") || message.includes("blocked")) {
+        revealManualFallback();
+      }
     } finally {
       setLoadingVideo(false);
+    }
+  });
+
+  manualForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (loadingVideo) return;
+
+    const videoUrl = videoInput.value.trim();
+    const transcriptText = transcriptInput.value.trim();
+    if (!videoUrl) {
+      setStatus("Enter the YouTube URL first so source cards link to the right video.", "error");
+      videoInput.focus();
+      return;
+    }
+    if (!transcriptText) {
+      setStatus("Paste the video's transcript first.", "error");
+      transcriptInput.focus();
+      return;
+    }
+
+    loadingVideo = true;
+    loadButton.disabled = true;
+    manualSubmit.disabled = true;
+    manualSubmit.classList.add("is-loading");
+    manualSubmitLabel.textContent = "Indexing pasted transcript…";
+    videoStatus.textContent = "Preparing timestamp-aware chunks and building the semantic search index.";
+    videoStatus.className = "inline-status";
+    videoStatus.hidden = false;
+
+    try {
+      const data = await requestJson("/api/load-transcript", {
+        video_url: videoUrl,
+        transcript_text: transcriptText
+      });
+      onIndexSuccess(data);
+      transcriptInput.value = "";
+    } catch (error) {
+      setStatus(error.message || "Could not index the pasted transcript.", "error");
+    } finally {
+      loadingVideo = false;
+      loadButton.disabled = false;
+      manualSubmit.disabled = false;
+      manualSubmit.classList.remove("is-loading");
+      manualSubmitLabel.textContent = "Index pasted transcript →";
     }
   });
 

@@ -20,13 +20,18 @@ from youtube_transcript_api._errors import (
     RequestBlocked,
 )
 
-from rag_core import build_timestamped_chunks, extract_video_id, format_timestamp
+from rag_core import (
+    build_timestamped_chunks,
+    extract_video_id,
+    format_timestamp,
+    parse_pasted_transcript,
+)
 from rate_limiter import SlidingWindowRateLimiter
 
 load_dotenv()
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 12 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 512 * 1024
 app.config["JSON_SORT_KEYS"] = False
 
 # Render terminates HTTPS and forwards client IP information through one trusted
@@ -52,6 +57,7 @@ CHUNK_SIZE = 1400
 CHUNK_OVERLAP = 180
 RATE_LIMIT_RULES = {
     "/api/load-video": (4, "video indexing"),
+    "/api/load-transcript": (4, "video indexing"),
     "/api/chat": (20, "questions"),
 }
 _RATE_LIMITER = SlidingWindowRateLimiter(window_seconds=60.0, max_keys=5000)
@@ -99,15 +105,20 @@ def _load_transcript(video_id: str):
     return snippets, getattr(transcript, "language_code", "unknown")
 
 
-def _get_or_create_index(video_id: str):
-    with _CACHE_LOCK:
-        cached = _INDEX_CACHE.get(video_id)
-        if cached:
-            _INDEX_CACHE.move_to_end(video_id)
-            return cached, True
+def _snippet_text(item) -> str:
+    value = item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")
+    return str(value or "")
 
-    snippets, language = _load_transcript(video_id)
-    transcript_chars = sum(len(str(getattr(item, "text", "") or "")) for item in snippets)
+
+def _build_index(
+    video_id: str,
+    snippets,
+    language: str,
+    timestamp_available: bool,
+    *,
+    replace_existing: bool = False,
+):
+    transcript_chars = sum(len(_snippet_text(item)) for item in snippets)
     if transcript_chars > MAX_TRANSCRIPT_CHARS:
         raise TranscriptTooLong(
             "This transcript is too long for the demo index limit. Try a shorter video."
@@ -132,6 +143,7 @@ def _get_or_create_index(video_id: str):
                 "chunk_index": chunk["chunk_index"],
                 "start_seconds": chunk["start_seconds"],
                 "end_seconds": chunk["end_seconds"],
+                "timestamp_available": timestamp_available,
             },
         )
         for chunk in chunks
@@ -145,22 +157,39 @@ def _get_or_create_index(video_id: str):
         "language": language,
         "chunk_count": len(chunks),
         "transcript_chars": transcript_chars,
-        # Count the original captions, not overlapping chunk text.
-        "word_count": sum(len(str(getattr(item, "text", "") or "").split()) for item in snippets),
+        "timestamp_available": timestamp_available,
+        # Count the source text only, not repeated overlap between chunks.
+        "word_count": sum(len(_snippet_text(item).split()) for item in snippets),
     }
 
     with _CACHE_LOCK:
-        # A concurrent request may have indexed the same video while this request
-        # was embedding. Reuse the first cached entry and avoid replacing it.
         cached = _INDEX_CACHE.get(video_id)
-        if cached:
+        if cached and not replace_existing:
             _INDEX_CACHE.move_to_end(video_id)
             return cached, True
         _INDEX_CACHE[video_id] = entry
+        _INDEX_CACHE.move_to_end(video_id)
         while len(_INDEX_CACHE) > MAX_CACHED_VIDEOS:
             _INDEX_CACHE.popitem(last=False)
 
     return entry, False
+
+
+def _get_or_create_index(video_id: str):
+    with _CACHE_LOCK:
+        cached = _INDEX_CACHE.get(video_id)
+        if cached:
+            _INDEX_CACHE.move_to_end(video_id)
+            return cached, True
+
+    snippets, language = _load_transcript(video_id)
+    return _build_index(
+        video_id,
+        snippets,
+        language,
+        timestamp_available=True,
+        replace_existing=False,
+    )
 
 
 def _answer_text(response) -> str:
@@ -191,20 +220,29 @@ def _retrieve_sources(vector_store, question: str, video_id: str):
         source_id = "S" + str(len(sources) + 1)
         start_seconds = max(0, int(float(metadata.get("start_seconds", 0))))
         end_seconds = max(start_seconds, int(float(metadata.get("end_seconds", start_seconds))))
-        youtube_url = "https://www.youtube.com/watch?v=" + video_id + "&t=" + str(start_seconds) + "s"
+        timestamp_available = bool(metadata.get("timestamp_available", True))
+        youtube_url = "https://www.youtube.com/watch?v=" + video_id
+        if timestamp_available:
+            youtube_url += "&t=" + str(start_seconds) + "s"
         source_text = document.page_content.strip()
         sources.append({
             "id": source_id,
             "text": source_text[:900],
             "start_seconds": start_seconds,
             "end_seconds": end_seconds,
-            "start_timestamp": format_timestamp(start_seconds),
-            "end_timestamp": format_timestamp(end_seconds),
+            "timestamp_available": timestamp_available,
+            "start_timestamp": format_timestamp(start_seconds) if timestamp_available else None,
+            "end_timestamp": format_timestamp(end_seconds) if timestamp_available else None,
             "youtube_url": youtube_url,
         })
 
     context = "\n\n".join(
-        "[" + source["id"] + "] (" + source["start_timestamp"] + "–" + source["end_timestamp"] + ")\n"
+        "[" + source["id"] + "] "
+        + (
+            "(" + source["start_timestamp"] + "–" + source["end_timestamp"] + ")\n"
+            if source["timestamp_available"]
+            else "(timestamp not provided)\n"
+        )
         + source["text"]
         for source in sources
     )
@@ -279,14 +317,23 @@ def load_video():
             "language": entry["language"],
             "word_count": entry["word_count"],
             "chunk_count": entry["chunk_count"],
+            "timestamp_available": entry["timestamp_available"],
+            "input_mode": "youtube",
             "cache_hit": cache_hit,
         })
     except (IpBlocked, RequestBlocked):
-        return jsonify({"error": "YouTube temporarily blocked transcript requests. Wait a little and try again."}), 429
+        logger.warning("YouTube blocked transcript retrieval for video_id=%s", video_id)
+        return jsonify({
+            "error": "The hosted server cannot fetch this video's captions right now. Use “Paste transcript instead” below to continue; no YouTube block is bypassed."
+        }), 429
     except (TranscriptsDisabled, NoTranscriptFound):
-        return jsonify({"error": "No accessible captions were found for this video."}), 422
+        return jsonify({
+            "error": "No accessible captions were found for this video. If the video has a transcript in YouTube, use “Paste transcript instead”."
+        }), 422
     except CouldNotRetrieveTranscript:
-        return jsonify({"error": "The transcript could not be retrieved. Captions may be unavailable or YouTube may be rate-limiting requests."}), 422
+        return jsonify({
+            "error": "The transcript could not be retrieved. If YouTube's Show transcript menu is available, paste its text using the fallback below."
+        }), 422
     except TranscriptTooLong as exc:
         return jsonify({"error": str(exc)}), 413
     except ValueError as exc:
@@ -294,6 +341,58 @@ def load_video():
     except Exception:
         logger.exception("Video indexing failed for video_id=%s", video_id)
         return jsonify({"error": "Video indexing failed. Check the server logs and configured Google AI model, then try again."}), 502
+
+
+@app.post("/api/load-transcript")
+def load_pasted_transcript():
+    if not os.getenv("GOOGLE_API_KEY"):
+        return jsonify({"error": "The server is missing its Google AI API key. Configure it before indexing a pasted transcript."}), 503
+
+    payload = request.get_json(silent=True) or {}
+    video_input = payload.get("video_url", "")
+    transcript_text = payload.get("transcript_text", "")
+    if not isinstance(video_input, str) or len(video_input) > 2048:
+        return jsonify({"error": "Enter the YouTube URL for the video whose transcript you pasted."}), 400
+    video_id = extract_video_id(video_input)
+    if not video_id:
+        return jsonify({"error": "Enter a valid YouTube video URL or 11-character video ID first."}), 400
+    if not isinstance(transcript_text, str) or not transcript_text.strip():
+        return jsonify({"error": "Paste the video's transcript text first."}), 400
+    if len(transcript_text) > MAX_TRANSCRIPT_CHARS:
+        return jsonify({
+            "error": "The pasted transcript exceeds the " + str(MAX_TRANSCRIPT_CHARS) + "-character demo limit."
+        }), 413
+
+    snippets, timestamp_available = parse_pasted_transcript(transcript_text)
+    if not snippets or not any(_snippet_text(item).strip() for item in snippets):
+        return jsonify({"error": "No usable transcript text was found. Paste the caption text and try again."}), 422
+
+    try:
+        language = "pasted transcript (timestamps preserved)" if timestamp_available else "pasted transcript (no timestamps)"
+        entry, _ = _build_index(
+            video_id,
+            snippets,
+            language,
+            timestamp_available=timestamp_available,
+            replace_existing=True,
+        )
+        return jsonify({
+            "video_id": video_id,
+            "message": "Pasted transcript indexed and ready for questions.",
+            "language": entry["language"],
+            "word_count": entry["word_count"],
+            "chunk_count": entry["chunk_count"],
+            "timestamp_available": timestamp_available,
+            "input_mode": "pasted",
+            "cache_hit": False,
+        })
+    except TranscriptTooLong as exc:
+        return jsonify({"error": str(exc)}), 413
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 422
+    except Exception:
+        logger.exception("Pasted transcript indexing failed for video_id=%s", video_id)
+        return jsonify({"error": "The pasted transcript could not be indexed. Check the server logs and Google AI configuration, then try again."}), 502
 
 
 @app.post("/api/chat")

@@ -54,6 +54,78 @@ def format_timestamp(seconds: float | int | None) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
 
 
+
+_TIMESTAMP_LINE = re.compile(
+    r"^\s*\[?(?P<timestamp>(?:\d{1,2}:)?\d{1,2}:\d{2})\]?\s*(?P<text>.*)$"
+)
+
+
+def _parse_timestamp(value: str) -> float:
+    parts = [int(part) for part in value.split(":")]
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return float(minutes * 60 + seconds)
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+        return float(hours * 3600 + minutes * 60 + seconds)
+    raise ValueError("unsupported timestamp")
+
+
+def parse_pasted_transcript(value: str) -> tuple[list[dict], bool]:
+    """Parse pasted transcript lines, preserving timestamps when present.
+
+    Supports inline lines such as 0:12 spoken words and alternating 0:12 /
+    spoken words lines. When no timestamp lines exist, the complete text is
+    treated as an un-timestamped transcript. Returns snippets and a time flag.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return [], False
+
+    segments: list[dict] = []
+    pending_start: float | None = None
+    timestamp_count = 0
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _TIMESTAMP_LINE.match(stripped)
+        if match:
+            try:
+                start = _parse_timestamp(match.group("timestamp"))
+            except (ValueError, TypeError):
+                match = None
+        if match:
+            timestamp_count += 1
+            text = match.group("text").strip()
+            if text:
+                segments.append({"text": text, "start": start, "duration": 0.0})
+                pending_start = None
+            else:
+                pending_start = start
+            continue
+
+        if pending_start is not None:
+            segments.append({"text": stripped, "start": pending_start, "duration": 0.0})
+            pending_start = None
+        elif segments:
+            segments[-1]["text"] += " " + stripped
+
+    has_timestamps = timestamp_count > 0
+    if not segments:
+        return [{"text": " ".join(raw.split()), "start": 0.0, "duration": 0.0}], False
+
+    segments = sorted(segments, key=lambda segment: segment["start"])
+    for index, segment in enumerate(segments[:-1]):
+        next_start = segments[index + 1]["start"]
+        segment["duration"] = max(0.0, next_start - segment["start"])
+
+    if not has_timestamps:
+        return [{"text": " ".join(raw.split()), "start": 0.0, "duration": 0.0}], False
+
+    return segments, True
+
 def _value(item, key: str, default=0):
     if isinstance(item, dict):
         return item.get(key, default)

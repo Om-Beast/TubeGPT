@@ -318,3 +318,80 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+
+/* Graceful fallback when the hosted server cannot fetch YouTube captions. */
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  padding: 9px 0 1px;
+  background: transparent;
+  color: #9698b0;
+  font-size: 9px;
+  text-align: left;
+  cursor: pointer;
+}
+.text-button span { color: #baa9ff; font-weight: 750; }
+.text-button:hover span { color: #d0c4ff; text-decoration: underline; }
+.manual-transcript-panel {
+  margin-top: 11px;
+  padding: 13px;
+  border: 1px solid rgba(172, 145, 255, .23);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(157, 130, 255, .07), rgba(255, 255, 255, .015));
+}
+.manual-panel-heading { display: flex; align-items: flex-start; gap: 9px; }
+.manual-panel-icon {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  color: #c4aeff;
+  background: rgba(157, 130, 255, .13);
+  font-size: 17px;
+}
+.manual-panel-heading h3 { margin: 1px 0 3px; font-size: 11px; font-weight: 800; letter-spacing: -.015em; }
+.manual-panel-heading p, .manual-help { margin: 0; color: #9a9cb5; font-size: 9px; line-height: 1.65; }
+.manual-panel-heading p strong { color: #d2c8ff; font-weight: 750; }
+.manual-help { margin: 9px 0 12px; color: #81849f; }
+.manual-form label { display: block; margin: 0 0 7px; color: #cecee0; font-size: 10px; font-weight: 750; }
+.manual-form textarea {
+  display: block;
+  width: 100%;
+  min-height: 130px;
+  resize: vertical;
+  border: 1px solid rgba(179, 178, 215, .18);
+  border-radius: 9px;
+  padding: 10px;
+  outline: 0;
+  color: #edebf9;
+  background: rgba(9, 10, 17, .55);
+  font: 10px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.manual-form textarea:focus { border-color: rgba(172, 145, 255, .7); box-shadow: 0 0 0 3px rgba(172, 145, 255, .08); }
+.manual-form textarea::placeholder { color: #62647e; }
+.secondary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  margin-top: 9px;
+  padding: 9px 11px;
+  border: 1px solid rgba(172, 145, 255, .3);
+  border-radius: 9px;
+  color: #d5cbff;
+  background: rgba(157, 130, 255, .11);
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background .18s, border-color .18s;
+}
+.secondary-button:hover:not(:disabled) { border-color: rgba(172, 145, 255, .6); background: rgba(157, 130, 255, .17); }
+.secondary-button:disabled { opacity: .55; cursor: not-allowed; }
+.secondary-button.is-loading .button-spinner { display: inline-block; }
