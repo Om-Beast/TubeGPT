@@ -21,7 +21,7 @@ class HybridRetrievalTests(unittest.TestCase):
         self.assertGreater(scores[1], scores[0])
         self.assertEqual(scores[0], 0.0)
 
-    def test_hybrid_uses_dense_and_lexical_evidence(self):
+    def test_hybrid_includes_lexical_match_and_beats_lower_dense_candidate(self):
         corpus = [
             doc(0, "A general explanation"),
             doc(1, "The exact error code is RATE_LIMIT_429"),
@@ -29,8 +29,11 @@ class HybridRetrievalTests(unittest.TestCase):
         ]
         dense = [corpus[2], corpus[0]]
         ranked = hybrid_rank_documents("RATE_LIMIT_429", dense, corpus, top_k=3)
-        self.assertEqual([item["metadata"]["chunk_index"] for item in ranked][0], 1)
-        self.assertIn(2, [item["metadata"]["chunk_index"] for item in ranked])
+        ranked_ids = [item["metadata"]["chunk_index"] for item in ranked]
+        # A dense rank-1 item may tie a lexical rank-1 item under standard RRF.
+        self.assertIn(1, ranked_ids[:2])
+        self.assertLess(ranked_ids.index(1), ranked_ids.index(0))
+        self.assertIn(2, ranked_ids)
 
     def test_rrf_deduplicates_chunk_ids(self):
         a, b = doc(1, "same chunk"), doc(2, "other chunk")
