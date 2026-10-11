@@ -1,191 +1,268 @@
-document.addEventListener('DOMContentLoaded', () => {
-  const loadForm = document.getElementById('load-form');
-  const videoInput = document.getElementById('video-input');
-  const loadBtn = document.getElementById('load-btn');
-  const videoStatus = document.getElementById('video-status');
-  const chatBadge = document.getElementById('chat-badge');
-  
-  const chatForm = document.getElementById('chat-form');
-  const questionInput = document.getElementById('question-input');
-  const sendBtn = document.getElementById('send-btn');
-  const chatMessages = document.getElementById('chat-messages');
+(function () {
+  "use strict";
 
-  let currentVideoId = null;
+  const byId = (id) => document.getElementById(id);
+  const loadForm = byId("load-form");
+  const videoInput = byId("video-input");
+  const loadButton = byId("load-btn");
+  const loadLabel = byId("load-btn-label");
+  const videoStatus = byId("video-status");
+  const videoPreview = byId("video-preview");
+  const videoThumb = byId("video-thumb");
+  const videoIdLabel = byId("video-id-label");
+  const videoMeta = byId("video-meta");
+  const openVideoLink = byId("open-video-link");
+  const chatForm = byId("chat-form");
+  const questionInput = byId("question-input");
+  const sendButton = byId("send-btn");
+  const sendLabel = byId("send-btn-label");
+  const chatMessages = byId("chat-messages");
+  const welcomeState = byId("welcome-state");
+  const typingIndicator = byId("typing-indicator");
+  const chatStatus = byId("chat-status");
+  const chatSubtitle = byId("chat-subtitle");
+  const suggestionButtons = Array.from(document.querySelectorAll("[data-question]"));
 
-  // Function to show status messages
-  function showStatus(message, type) {
-    videoStatus.className = `status ${type} show`;
-    
-    if (type === 'loading') {
-      videoStatus.innerHTML = `<div class="spinner"></div> ${message}`;
+  let activeVideoId = null;
+  let loadingVideo = false;
+  let sendingQuestion = false;
+
+  function setStatus(message, type) {
+    videoStatus.textContent = message;
+    videoStatus.className = "inline-status" + (type ? " " + type : "");
+    videoStatus.hidden = !message;
+  }
+
+  function setLoadingVideo(loading) {
+    loadingVideo = loading;
+    loadButton.disabled = loading;
+    loadButton.classList.toggle("is-loading", loading);
+    loadLabel.textContent = loading ? "Indexing transcript…" : "Index video →";
+    if (loading) {
+      videoStatus.textContent = "Fetching captions, creating timestamped chunks and building the search index. Long videos can take a moment.";
+      videoStatus.className = "inline-status";
+      videoStatus.hidden = false;
+    }
+  }
+
+  function setSendingQuestion(sending) {
+    sendingQuestion = sending;
+    sendButton.disabled = sending || !activeVideoId;
+    sendButton.classList.toggle("is-loading", sending);
+    sendLabel.textContent = sending ? "Thinking…" : "Ask TubeGPT";
+    typingIndicator.hidden = !sending;
+    if (sending) {
+      chatStatus.textContent = "Retrieving evidence";
+      chatStatus.parentElement.classList.add("is-ready");
     } else {
-      videoStatus.textContent = message;
+      chatStatus.textContent = activeVideoId ? "Index ready" : "Awaiting video";
     }
-    
-    // Auto-hide success/error messages after a while if desired
-    if (type !== 'loading') {
-      setTimeout(() => {
-        if (videoStatus.className.includes(type)) {
-          // Keep it visible but you could fade it out
-        }
-      }, 5000);
-    }
+    scrollToBottom();
   }
 
-  // Load video event listener
-  loadForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const url = videoInput.value.trim();
-    if (!url) return;
-
-    // Clear previous chat history when a new video is loaded
-    chatMessages.innerHTML = `
-      <div class="message bot">
-        <div class="bubble">
-          Load a YouTube video above, then ask anything about its content.<br><br>
-          Try: <em>"Can you summarize the video?"</em> or <em>"What topics are discussed?"</em>
-        </div>
-      </div>
-    `;
-
-    // UI state: Loading
-    loadBtn.disabled = true;
-    videoInput.disabled = true;
-    showStatus('Fetching transcript and generating embeddings...', 'loading');
-    
+  async function requestJson(url, payload) {
+    let response;
     try {
-      const response = await fetch('/api/load-video', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ video_url: url })
+      response = await fetch(url, {
+        method: payload ? "POST" : "GET",
+        headers: payload ? { "Content-Type": "application/json" } : {},
+        body: payload ? JSON.stringify(payload) : undefined,
+        credentials: "same-origin"
       });
-      
-      const data = await response.json();
-      
-      if (response.ok) {
-        currentVideoId = data.video_id;
-        showStatus(data.message, 'success');
-        
-        // Enable chat interface
-        chatBadge.textContent = 'Ready to Chat';
-        chatBadge.className = 'badge badge-ready';
-        questionInput.disabled = false;
-        sendBtn.disabled = false;
-        questionInput.focus();
-      } else {
-        showStatus(data.error || 'Failed to load video.', 'error');
-        currentVideoId = null;
-        chatBadge.textContent = 'No video loaded';
-        chatBadge.className = 'badge badge-idle';
-        questionInput.disabled = true;
-        sendBtn.disabled = true;
-      }
-    } catch (error) {
-      showStatus('Network error occurred while loading video.', 'error');
-    } finally {
-      loadBtn.disabled = false;
-      videoInput.disabled = false;
+    } catch (_error) {
+      throw new Error("Could not reach the server. Check that the app is running and try again.");
     }
-  });
 
-  // Helper to add a message bubble
-  function addMessage(text, sender) {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = `message ${sender}`;
-    
-    const bubbleDiv = document.createElement('div');
-    bubbleDiv.className = 'bubble';
-    
-    // Simple markdown formatting (bold, newlines)
-    let formattedText = text.replace(/\n/g, '<br>');
-    formattedText = formattedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    
-    bubbleDiv.innerHTML = formattedText;
-    msgDiv.appendChild(bubbleDiv);
-    
-    chatMessages.appendChild(msgDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
-
-  // Helper to add typing indicator
-  function addTypingIndicator() {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'message bot typing';
-    msgDiv.id = 'typing-indicator';
-    
-    const bubbleDiv = document.createElement('div');
-    bubbleDiv.className = 'bubble';
-    
-    const indicatorDiv = document.createElement('div');
-    indicatorDiv.className = 'typing-indicator';
-    indicatorDiv.innerHTML = '<span></span><span></span><span></span>';
-    
-    bubbleDiv.appendChild(indicatorDiv);
-    msgDiv.appendChild(bubbleDiv);
-    
-    chatMessages.appendChild(msgDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
-
-  function removeTypingIndicator() {
-    const indicator = document.getElementById('typing-indicator');
-    if (indicator) {
-      indicator.remove();
+    let data;
+    try {
+      data = await response.json();
+    } catch (_error) {
+      throw new Error("The server returned an unreadable response. Check the app logs.");
     }
+    if (!response.ok) {
+      throw new Error(data && data.error ? data.error : "The request failed. Please try again.");
+    }
+    return data;
   }
 
-  // Chat event listener
-  chatForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    
-    if (!currentVideoId) {
-      alert('Please load a video first!');
+  function createElement(tag, className, text) {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text !== undefined && text !== null) element.textContent = String(text);
+    return element;
+  }
+
+  function appendMessage(role, text, sources, isError) {
+    if (welcomeState && welcomeState.isConnected) welcomeState.hidden = true;
+
+    const isUser = role === "user";
+    const message = createElement("article", "message" + (isUser ? " user" : "") + (isError ? " message-error" : ""));
+    const avatar = createElement("div", "message-avatar", isUser ? "Y" : "✳");
+    avatar.setAttribute("aria-hidden", "true");
+    const body = createElement("div", "message-body");
+    const author = createElement("p", "message-author", isUser ? "YOU" : "TUBEGPT");
+    const bubble = createElement("div", "message-bubble", text || "");
+    body.append(author, bubble);
+
+    if (!isUser && Array.isArray(sources) && sources.length) {
+      body.appendChild(createElement("div", "source-heading", "Retrieved transcript evidence"));
+      const sourceList = createElement("div", "source-list");
+      sources.forEach((source) => sourceList.appendChild(createSourceCard(source)));
+      body.appendChild(sourceList);
+    }
+
+    message.append(avatar, body);
+    chatMessages.appendChild(message);
+    scrollToBottom();
+    return message;
+  }
+
+  function createSourceCard(source) {
+    const start = Number.isFinite(Number(source.start_seconds)) ? Math.max(0, Math.floor(Number(source.start_seconds))) : 0;
+    const safeVideoId = activeVideoId || "";
+    const expectedPrefix = "https://www.youtube.com/watch?v=";
+    const href = typeof source.youtube_url === "string" && source.youtube_url.startsWith(expectedPrefix)
+      ? source.youtube_url
+      : expectedPrefix + encodeURIComponent(safeVideoId) + "&t=" + start + "s";
+
+    const link = createElement("a", "source-card");
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.setAttribute("aria-label", "Open source " + (source.id || "") + " at " + (source.start_timestamp || "timestamp"));
+
+    const tag = createElement("span", "source-tag", source.id || "SRC");
+    const content = createElement("span", "source-content");
+    const meta = createElement("span", "source-meta");
+    meta.appendChild(createElement("span", "", (source.start_timestamp || "00:00") + " – " + (source.end_timestamp || "00:00")));
+    meta.appendChild(createElement("span", "source-arrow", "↗"));
+    content.append(meta, createElement("span", "source-text", source.text || "Open the video to verify this passage."));
+    link.append(tag, content);
+    return link;
+  }
+
+  function scrollToBottom() {
+    window.requestAnimationFrame(() => {
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    });
+  }
+
+  function clearConversation() {
+    chatMessages.querySelectorAll(".message").forEach((message) => message.remove());
+    if (welcomeState) welcomeState.hidden = true;
+  }
+
+  function updateVideoPreview(data) {
+    const videoId = data.video_id;
+    videoPreview.hidden = false;
+    videoThumb.src = "https://img.youtube.com/vi/" + encodeURIComponent(videoId) + "/hqdefault.jpg";
+    videoThumb.alt = "Thumbnail for YouTube video " + videoId;
+    videoThumb.onerror = function () {
+      this.removeAttribute("src");
+      this.alt = "YouTube thumbnail is unavailable";
+    };
+    videoIdLabel.textContent = "YouTube video · " + videoId;
+    const words = Number(data.word_count || 0).toLocaleString();
+    const chunks = Number(data.chunk_count || 0).toLocaleString();
+    videoMeta.textContent = words + " words indexed · " + chunks + " timestamped chunks · " + (data.language || "caption language unknown");
+    openVideoLink.href = "https://www.youtube.com/watch?v=" + encodeURIComponent(videoId);
+  }
+
+  loadForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (loadingVideo) return;
+
+    const videoUrl = videoInput.value.trim();
+    if (!videoUrl) {
+      setStatus("Paste a YouTube URL or video ID first.", "error");
       return;
     }
-    
-    const question = questionInput.value.trim();
-    if (!question) return;
-    
-    // Add user message
-    addMessage(question, 'user');
-    questionInput.value = '';
-    
-    // Disable inputs while waiting
-    questionInput.disabled = true;
-    sendBtn.disabled = true;
-    
-    // Show typing indicator
-    addTypingIndicator();
-    
+
+    setLoadingVideo(true);
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          video_id: currentVideoId,
-          question: question
-        })
-      });
-      
-      const data = await response.json();
-      removeTypingIndicator();
-      
-      if (response.ok) {
-        addMessage(data.answer, 'bot');
-      } else {
-        addMessage(`**Error:** ${data.error || 'Failed to get answer.'}`, 'bot');
-      }
-    } catch (error) {
-      removeTypingIndicator();
-      addMessage('**Error:** Network error occurred.', 'bot');
-    } finally {
+      const data = await requestJson("/api/load-video", { video_url: videoUrl });
+      activeVideoId = data.video_id;
+      updateVideoPreview(data);
+      setStatus(
+        "Transcript indexed successfully. " + Number(data.chunk_count || 0).toLocaleString() + " searchable chunks are ready.",
+        "success"
+      );
       questionInput.disabled = false;
-      sendBtn.disabled = false;
+      questionInput.placeholder = "Ask about this video… (Enter to send, Shift + Enter for a new line)";
+      sendButton.disabled = false;
+      suggestionButtons.forEach((button) => { button.disabled = false; });
+      chatStatus.textContent = "Index ready";
+      chatStatus.parentElement.classList.add("is-ready");
+      chatSubtitle.textContent = "Answers grounded in " + (data.language || "video") + " captions";
+
+      clearConversation();
+      appendMessage(
+        "assistant",
+        "Your video is indexed and ready. Ask a question and I’ll search the transcript, answer from the retrieved passages, and attach timestamp links so you can verify the evidence.",
+        []
+      );
       questionInput.focus();
+    } catch (error) {
+      setStatus(error.message || "Could not index this video.", "error");
+    } finally {
+      setLoadingVideo(false);
     }
   });
-});
+
+  async function askQuestion(question) {
+    if (!activeVideoId || sendingQuestion) return;
+    const cleanedQuestion = String(question || "").trim();
+    if (!cleanedQuestion) return;
+
+    appendMessage("user", cleanedQuestion, []);
+    questionInput.value = "";
+    resizeQuestionInput();
+    setSendingQuestion(true);
+
+    try {
+      const data = await requestJson("/api/chat", {
+        video_id: activeVideoId,
+        question: cleanedQuestion
+      });
+      appendMessage("assistant", data.answer || "No answer was returned.", data.sources || []);
+    } catch (error) {
+      appendMessage("assistant", error.message || "Something went wrong. Please try again.", [], true);
+    } finally {
+      setSendingQuestion(false);
+      if (!questionInput.disabled) questionInput.focus();
+    }
+  }
+
+  chatForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    askQuestion(questionInput.value);
+  });
+
+  questionInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      if (chatForm.requestSubmit) chatForm.requestSubmit();
+      else askQuestion(questionInput.value);
+    }
+  });
+
+  questionInput.addEventListener("input", resizeQuestionInput);
+
+  function resizeQuestionInput() {
+    questionInput.style.height = "auto";
+    questionInput.style.height = Math.min(questionInput.scrollHeight, 110) + "px";
+  }
+
+  suggestionButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const question = button.getAttribute("data-question") || "";
+      if (!activeVideoId || sendingQuestion) return;
+      askQuestion(question);
+    });
+  });
+
+  // Light startup check makes a misconfigured deployment easier to diagnose.
+  requestJson("/api/health").catch(() => {
+    setStatus("The API is not reachable. Check the deployment or start the Flask server.", "error");
+  });
+})();
