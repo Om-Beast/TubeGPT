@@ -42,4 +42,4 @@ Similarity distances depend on the embedding model and index configuration. A di
 - Concurrent first-time requests for the same video may duplicate some indexing work.
 - The demo does not include account management, durable chat history, a distributed cache, a durable indexing queue, or calibrated retrieval evaluation.
 - The application does not download audio/video or bypass caption access restrictions.
-- Public deployment should use provider quotas, monitoring, and infrastructure-level abuse controls before broad use.
+- The API applies a best-effort in-process rolling-window limit of 4 video-index requests/minute and 20 chat requests/minute per client. Client IP extraction trusts the configured reverse-proxy hop count; use TRUST_PROXY_HOPS=0 when running directly and only trust known proxies. This limiter is process-local and is not a substitute for provider quotas or platform-level controls.

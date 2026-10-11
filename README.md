@@ -86,6 +86,7 @@ A Google API key is required for video indexing and answer generation. The UI an
 | GEMINI_EMBEDDING_MODEL | models/gemini-embedding-2 | Embedding model used to index and query chunks |
 | PORT | 5000 | Local / platform port |
 | FLASK_DEBUG | 0 | Enable Flask debug mode only for local development |
+| TRUST_PROXY_HOPS | 0 locally; 1 on Render | Number of trusted reverse-proxy hops; only enable when the proxy is trusted |
 | LOG_LEVEL | INFO | Server logging level |
 | MAX_TRANSCRIPT_CHARS | 120000 | Reject transcripts beyond this character limit |
 | MAX_CHUNKS | 180 | Cap the number of chunks embedded for one video |
