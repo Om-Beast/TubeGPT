@@ -27,6 +27,8 @@ from rag_core import (
     parse_pasted_transcript,
 )
 from rate_limiter import SlidingWindowRateLimiter
+from citation_validation import validate_citations
+from hybrid_retrieval import hybrid_rank_documents
 
 load_dotenv()
 
@@ -154,6 +156,7 @@ def _build_index(
     vector_store = FAISS.from_documents(documents, embeddings)
     entry = {
         "store": vector_store,
+        "documents": documents,
         "language": language,
         "chunk_count": len(chunks),
         "transcript_chars": transcript_chars,
@@ -205,12 +208,29 @@ def _answer_text(response) -> str:
     return str(content).strip()
 
 
-def _retrieve_sources(vector_store, question: str, video_id: str):
-    ranked_documents = vector_store.similarity_search_with_score(question, k=TOP_K)
+def _retrieve_sources(
+    vector_store,
+    question: str,
+    video_id: str,
+    corpus_documents=None,
+):
+    """Retrieve dense candidates, then fuse them with lexical BM25 results."""
+    dense_results = vector_store.similarity_search_with_score(question, k=TOP_K * 3)
+    dense_documents = [document for document, _distance in dense_results]
+    candidates = list(corpus_documents or dense_documents)
+    if not candidates:
+        candidates = dense_documents
+
+    ranked_documents = hybrid_rank_documents(
+        question,
+        dense_documents,
+        candidates,
+        top_k=TOP_K,
+    )
     sources = []
     seen_chunks = set()
 
-    for document, _distance in ranked_documents:
+    for document in ranked_documents:
         metadata = document.metadata or {}
         chunk_index = metadata.get("chunk_index")
         if chunk_index in seen_chunks:
@@ -227,6 +247,7 @@ def _retrieve_sources(vector_store, question: str, video_id: str):
         source_text = document.page_content.strip()
         sources.append({
             "id": source_id,
+            "chunk_index": chunk_index,
             "text": source_text[:900],
             "start_seconds": start_seconds,
             "end_seconds": end_seconds,
@@ -421,12 +442,23 @@ def chat():
         return jsonify({"error": "This video's index is no longer in memory. Load the video again to continue."}), 409
 
     try:
-        sources, context = _retrieve_sources(entry["store"], question, video_id)
+        sources, context = _retrieve_sources(
+            entry["store"],
+            question,
+            video_id,
+            corpus_documents=entry.get("documents"),
+        )
         if not sources:
             return jsonify({
                 "answer": "I could not retrieve relevant transcript passages for that question. Try asking it another way.",
                 "sources": [],
                 "video_id": video_id,
+                "citation_audit": {
+                    "valid": False,
+                    "has_citations": False,
+                    "invalid_count": 0,
+                    "attempts": 0,
+                },
             })
 
         model = ChatGoogleGenerativeAI(
@@ -436,14 +468,48 @@ def chat():
         )
         prompt = PROMPT_TEMPLATE.format(context=context, question=question)
         answer = _answer_text(model.invoke(prompt))
+        attempts = 1
+        available_source_ids = [source["id"] for source in sources]
+        audit = validate_citations(answer, available_source_ids)
+
+        # One bounded repair attempt catches missing/unknown labels without
+        # pretending that label validity proves semantic factual support.
+        if answer and not audit["valid"]:
+            repair_prompt = (
+                prompt
+                + "\n\nCITATION VALIDATION FEEDBACK:\n"
+                + "Available source labels: "
+                + ", ".join(available_source_ids)
+                + "\nInvalid labels in your previous draft: "
+                + (", ".join(audit["invalid_source_ids"]) or "none; the draft omitted valid labels")
+                + "\nRewrite the answer using only the available labels above. "
+                + "Cite factual claims with those exact labels, or explicitly state "
+                + "that the transcript evidence is insufficient. Do not invent labels."
+                + "\nPrevious draft to correct:\n"
+                + answer
+            )
+            repaired_answer = _answer_text(model.invoke(repair_prompt))
+            attempts = 2
+            if repaired_answer:
+                answer = repaired_answer
+            audit = validate_citations(answer, available_source_ids)
+
         if not answer:
             answer = "The model returned an empty answer. Please try the question again."
+            audit = validate_citations(answer, available_source_ids)
 
+        citation_audit = {
+            "valid": audit["valid"],
+            "has_citations": audit["has_citations"],
+            "invalid_count": len(audit["invalid_source_ids"]),
+            "attempts": attempts,
+        }
         return jsonify({
             "answer": answer,
             "sources": sources,
             "video_id": video_id,
             "retrieved_count": len(sources),
+            "citation_audit": citation_audit,
         })
     except Exception:
         logger.exception("Question answering failed for video_id=%s", video_id)

@@ -98,7 +98,7 @@
     return element;
   }
 
-  function appendMessage(role, text, sources, isError) {
+  function appendMessage(role, text, sources, isError, citationAudit) {
     if (welcomeState && welcomeState.isConnected) welcomeState.hidden = true;
 
     const isUser = role === "user";
@@ -109,6 +109,25 @@
     const author = createElement("p", "message-author", isUser ? "YOU" : "TUBEGPT");
     const bubble = createElement("div", "message-bubble", text || "");
     body.append(author, bubble);
+
+    if (!isUser && citationAudit && typeof citationAudit.valid === "boolean") {
+      const verified = citationAudit.valid;
+      const label = verified
+        ? "Source labels checked"
+        : "Source-label check needs review";
+      const note = verified
+        ? "Every citation label used by the answer exists in the retrieved source list. This checks label integrity, not whether a claim is factually supported."
+        : "Some citation labels are missing or unknown. Verify the answer against the evidence cards before relying on it.";
+      const audit = createElement("div", "citation-audit " + (verified ? "valid" : "warning"));
+      audit.appendChild(createElement("span", "citation-audit-icon", verified ? "✓" : "⚠"));
+      const copy = createElement("span", "citation-audit-copy");
+      copy.append(
+        createElement("strong", "", label),
+        createElement("small", "", note)
+      );
+      audit.appendChild(copy);
+      body.appendChild(audit);
+    }
 
     if (!isUser && Array.isArray(sources) && sources.length) {
       body.appendChild(createElement("div", "source-heading", "Retrieved transcript evidence"));
@@ -310,7 +329,7 @@
         video_id: activeVideoId,
         question: cleanedQuestion
       });
-      appendMessage("assistant", data.answer || "No answer was returned.", data.sources || []);
+      appendMessage("assistant", data.answer || "No answer was returned.", data.sources || [], false, data.citation_audit);
     } catch (error) {
       appendMessage("assistant", error.message || "Something went wrong. Please try again.", [], true);
     } finally {

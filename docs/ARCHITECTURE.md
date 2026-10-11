@@ -2,50 +2,66 @@
 
 ## Request path
 
-Browser UI → Flask route → transcript/index cache → FAISS retrieval → Gemini answer model → answer + source cards.
+Browser UI → Flask route → transcript/index cache → FAISS dense retrieval + BM25 lexical ranking → Reciprocal Rank Fusion → Gemini answer model → citation-label audit → source cards.
 
 ## Indexing path
 
-1. Validate the user's input and extract an 11-character YouTube video ID from an allow-listed host/path.
-2. Request captions with youtube-transcript-api. Prefer English where available and fall back to an available transcript. If the hosting network is blocked, the user can submit pasted transcript text to a separate endpoint.
-3. For pasted text, parse inline timestamp lines or alternating timestamp/caption lines when present. If the user supplies plain text without timestamps, keep it un-timestamped rather than fabricating timing metadata.
-4. Normalize whitespace and build caption groups up to a character budget. Retain whole-caption overlap and the caption time range.
-5. Convert each chunk to a LangChain Document containing chunk_index, start_seconds, end_seconds, and timestamp_available metadata.
-6. Embed the documents and build an in-memory FAISS index.
-7. Insert the index into an OrderedDict LRU cache. Evict the oldest index when the configured cache limit is exceeded.
+1. Validate a YouTube URL or 11-character video ID.
+2. Fetch accessible captions. If the hosting network is blocked, a user can submit transcript text from YouTube's Show transcript panel.
+3. For pasted text, parse inline or standalone timestamp lines when present. Plain text without times remains un-timestamped.
+4. Normalize captions and build bounded overlapping chunks while preserving approximate caption time ranges.
+5. Convert chunks to LangChain Documents containing chunk_index, start_seconds, end_seconds, and timestamp_available metadata.
+6. Embed documents and build an in-memory FAISS index.
+7. Store both the vector index and source documents in the process-local LRU cache, evicting old video indexes when the configured limit is exceeded.
 
 ## Question path
 
 1. Validate the video ID and question length.
-2. Retrieve the top four chunks from the selected video's FAISS index.
-3. Deduplicate returned chunks by chunk index.
-4. Assign response-local source labels such as S1 and S2. These labels and time ranges are included in the context passed to the model.
-5. Instruct the model to answer only from those excerpts, cite the labels, ignore instructions embedded in transcript text, and abstain when the evidence is insufficient.
-6. Return the text answer and the evidence excerpts as structured JSON. The client creates DOM nodes with textContent instead of inserting model output as HTML.
+2. Retrieve up to three times TOP_K dense candidates from FAISS.
+3. Calculate corpus-wide BM25 rankings using normalized Unicode word tokens.
+4. Fuse dense and lexical rankings using Reciprocal Rank Fusion (RRF). RRF uses rank positions instead of mixing raw similarity distances and lexical scores.
+5. Deduplicate chunks and return the top four excerpts with source IDs and timestamps when available.
+6. Ask Gemini to answer from only those excerpts, cite source IDs, ignore instructions embedded in transcript text, and abstain when evidence is insufficient.
+7. Check that cited labels exist in the retrieved source list. If labels are absent or invalid, make one bounded repair attempt with the allowed source IDs.
+8. Return the answer, source metadata, and citation-label audit status. The frontend renders model text with textContent rather than inserting it as HTML.
 
 ## Key design decisions
 
+### Why hybrid retrieval?
+
+Dense retrieval helps with paraphrases and conceptual similarity. BM25 helps with exact names, acronyms, error codes, and technical identifiers. RRF fuses ranked positions without assuming that a dense distance and a BM25 score share the same scale. Hybrid retrieval can still underperform dense-only search on some datasets, so the evaluation script compares both paths instead of assuming the change helps.
+
+### What does citation validation guarantee?
+
+It verifies syntax-level references: a label used in the answer must exist in the current retrieved source set. One repair attempt is made if labels are absent or invalid. It does not prove that a cited passage semantically supports the claim. The UI explains this distinction, and the evaluation plan calls for human-rated citation support.
+
 ### Why timestamp-aware chunks?
-A plain text splitter loses the connection between a retrieved passage and the moment it was spoken. Each chunk tracks the first caption's start and last caption's end, so a source card can link directly to the relevant video moment. The time range follows caption boundaries; it is not word-level timing.
+
+A retrieved passage is more useful when a person can verify it. Metadata connects the result to a caption interval and allows a clickable video link. The range follows caption boundaries, not word-level alignment.
 
 ### Why FAISS?
-FAISS gives the project a real local vector similarity-search step without a managed vector database. The index is simple to run for a single demo process. It is not durable and it is not shared between multiple workers.
+
+FAISS gives the project a local vector similarity search without a managed vector database. The index is easy to run for a single-process demo but is not durable and is not shared between multiple workers.
 
 ### Why an LRU cache?
-Repeated questions on an already indexed video should not require fetching captions and embedding every chunk again. The cache is bounded to avoid unbounded memory growth, but a restart or eviction means the user must re-index the video.
 
-### Why not display a retrieval confidence percentage?
-Similarity distances depend on the embedding model and index configuration. A distance is not the same as a probability that the answer is correct. This UI surfaces the retrieved excerpts so users can judge evidence instead of trusting an invented confidence score.
+Repeated questions about an indexed video should not require rebuilding embeddings each time. A bounded LRU cache limits memory growth, but a restart or eviction means the user must re-index the video.
+
+### Why no confidence percentage?
+
+Similarity distance is not calibrated probability. Showing a confidence score without validation would be misleading. The UI exposes retrieved excerpts so users can judge the evidence.
+
+## Tests and evaluation
+
+- Dependency-free tests cover URL validation, timestamp parsing, chunking, BM25 ranking, RRF, citation-label validation, retrieval metrics, and rate limiting.
+- Mocked Flask API tests exercise route validation, security headers, manual transcript ingestion, the citation-repair retry, and rate-limit responses.
+- The retrieval evaluation script compares dense-only ranking against hybrid ranking on a manually labelled dataset. The bundled smoke dataset is small and must not be presented as a representative production benchmark.
+- Model-backed evaluation and citation-claim support still require configured credentials and a larger manually validated set.
 
 ## Operational limitations
 
-- Indexes are process-local and lost on restart.
-- Concurrent first-time requests for the same video may duplicate some indexing work.
-- The demo does not include account management, durable chat history, a distributed cache, a durable indexing queue, or calibrated retrieval evaluation.
-- The application does not download audio/video or bypass caption access restrictions.
-- The API applies a best-effort in-process rolling-window limit of 4 video-index requests/minute and 20 chat requests/minute per client. Client IP extraction trusts the configured reverse-proxy hop count; use TRUST_PROXY_HOPS=0 when running directly and only trust known proxies. This limiter is process-local and is not a substitute for provider quotas or platform-level controls.
-
-
-## Pasted-transcript fallback
-
-When the hosting network cannot retrieve captions automatically, users can paste accessible caption text from YouTube's own Show transcript panel. The app indexes it through the same chunking, embedding, FAISS and chat path. If timestamp lines are present, they are carried into source metadata. Plain pasted text remains usable, but source cards disclose that exact timestamps were not supplied and link to the video without a fabricated time. This is a resilience fallback, not a method to bypass YouTube's restrictions.
+- Indexes and rate limiter state are process-local and lost on restart.
+- Concurrent first-time requests for one video may duplicate indexing work.
+- There is no account system, durable chat history, shared vector database, background indexing queue, or calibrated quality metric.
+- The API applies best-effort in-process rate limits; provider quotas and platform-level abuse controls are still required for public traffic.
+- The app does not download audio/video or bypass caption access restrictions.

@@ -1,0 +1,128 @@
+{
+  "title": "TubeGPT RAG retrieval smoke evaluation",
+  "version": 1,
+  "description": "Small hand-labelled engineering smoke set. It is intended to make dense-vs-hybrid retrieval comparisons repeatable, not to support broad real-world accuracy claims.",
+  "documents": [
+    {
+      "id": "c01",
+      "text": "Retrieval augmented generation first retrieves relevant transcript passages and then asks the language model to produce an answer grounded in those passages."
+    },
+    {
+      "id": "c02",
+      "text": "Overlapping chunks reduce the risk that an important sentence split across chunk boundaries loses its surrounding context."
+    },
+    {
+      "id": "c03",
+      "text": "FAISS is a vector similarity index used to retrieve semantically similar transcript chunks from embedding representations."
+    },
+    {
+      "id": "c04",
+      "text": "BM25 is lexical retrieval and is useful for exact product names, technical tokens, acronyms, and identifiers that dense semantic search may rank poorly."
+    },
+    {
+      "id": "c05",
+      "text": "Reciprocal Rank Fusion combines the ranks of multiple retrieval systems without directly mixing their differently scaled raw scores."
+    },
+    {
+      "id": "c06",
+      "text": "Citation validation checks whether source labels such as S1 refer to source IDs actually supplied to the model; it does not prove factual entailment."
+    },
+    {
+      "id": "c07",
+      "text": "When retrieved transcript evidence is insufficient, the assistant should abstain or clearly state the limitation rather than fill gaps with outside knowledge."
+    },
+    {
+      "id": "c08",
+      "text": "A transcript can contain prompt injection instructions. Retrieved transcript text should be treated as untrusted content, not as developer or system instructions."
+    },
+    {
+      "id": "c09",
+      "text": "Embedding models map text into numerical vectors so that semantic similarity can be estimated in a shared vector space."
+    },
+    {
+      "id": "c10",
+      "text": "An LRU cache evicts the least recently used video index when the configured cache bound is exceeded, keeping the process-local index cache from growing without limit."
+    },
+    {
+      "id": "c11",
+      "text": "A per-client sliding-window rate limiter restricts the number of API requests in a time interval and can return HTTP 429 with a Retry-After header."
+    },
+    {
+      "id": "c12",
+      "text": "Recall at k measures whether labelled evidence appears near the top of retrieval results, while mean reciprocal rank rewards retrieving the first relevant chunk earlier."
+    }
+  ],
+  "cases": [
+    {
+      "id": "q01",
+      "question": "What are the two stages in retrieval augmented generation?",
+      "gold_chunk_ids": [
+        "c01"
+      ]
+    },
+    {
+      "id": "q02",
+      "question": "Why do transcript chunks overlap?",
+      "gold_chunk_ids": [
+        "c02"
+      ]
+    },
+    {
+      "id": "q03",
+      "question": "Which component does vector similarity search?",
+      "gold_chunk_ids": [
+        "c03",
+        "c09"
+      ]
+    },
+    {
+      "id": "q04",
+      "question": "Find the exact technical term BM25 and explain when it helps.",
+      "gold_chunk_ids": [
+        "c04"
+      ]
+    },
+    {
+      "id": "q05",
+      "question": "How can ranks from dense and lexical search be combined?",
+      "gold_chunk_ids": [
+        "c05"
+      ]
+    },
+    {
+      "id": "q06",
+      "question": "Does validating [S1] prove the answer is factually correct?",
+      "gold_chunk_ids": [
+        "c06"
+      ]
+    },
+    {
+      "id": "q07",
+      "question": "What should TubeGPT do if transcript evidence does not contain the answer?",
+      "gold_chunk_ids": [
+        "c07"
+      ]
+    },
+    {
+      "id": "q08",
+      "question": "How should the assistant handle instructions embedded in a transcript?",
+      "gold_chunk_ids": [
+        "c08"
+      ]
+    },
+    {
+      "id": "q09",
+      "question": "How do we compare retrieval quality reproducibly?",
+      "gold_chunk_ids": [
+        "c12"
+      ]
+    },
+    {
+      "id": "q10",
+      "question": "What stops an API client from sending too many questions?",
+      "gold_chunk_ids": [
+        "c11"
+      ]
+    }
+  ]
+}

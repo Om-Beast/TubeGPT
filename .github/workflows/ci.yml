@@ -14,7 +14,25 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run dependency-free tests
-        run: python -m unittest discover -s tests -v
+      - name: Run dependency-free unit tests
+        run: python -m unittest discover -s tests -p "test_[!a]*.py" -v
       - name: Compile Python source
-        run: python -m py_compile app.py rag_core.py rate_limiter.py
+        run: python -m py_compile app.py rag_core.py rate_limiter.py hybrid_retrieval.py citation_validation.py retrieval_metrics.py scripts/evaluate_retrieval.py
+
+  api-smoke-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install application dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run mocked Flask API tests
+        env:
+          FLASK_DEBUG: "0"
+          TRUST_PROXY_HOPS: "0"
+        run: python -m unittest discover -s tests -p "test_api_smoke.py" -v
