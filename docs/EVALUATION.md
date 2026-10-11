@@ -1,40 +1,40 @@
 # RAG evaluation plan
 
-This project deliberately does not claim a made-up accuracy or latency number. Before making an accuracy claim in a resume, build and run an evaluation set.
+Do not report an accuracy or latency number until the measurement has actually been run and reviewed.
 
-## Create a small gold set
+## Included retrieval smoke test
 
-Choose at least 8–10 videos you are permitted to analyse. For each video, write a small set of questions from the transcript and record the expected supporting time range. Include:
-- answerable factual questions,
-- questions that need details spread across more than one passage,
-- paraphrased questions that do not reuse the transcript's exact wording,
-- unanswerable questions whose answer is not in the transcript,
-- adversarial transcript content that tries to instruct the model to ignore its system prompt.
+The bundled file data/evaluation/retrieval_gold.json contains a small hand-labelled corpus of 12 short passages and 10 questions around retrieval engineering concepts. It allows repeatable comparison of dense-only FAISS ranking and hybrid dense+BM25 ranking.
 
-Keep the source transcript and expected evidence manually checked. Do not use model-generated answers as the only ground truth.
+Run from the project root after installing requirements and setting GOOGLE_API_KEY:
+
+    python scripts/evaluate_retrieval.py --top-k 4 --candidate-k 12 --output evaluation-report.json
+
+The script builds a FAISS index for the bundled corpus, retrieves dense candidates per query, calculates BM25 ranking, fuses ranks with Reciprocal Rank Fusion, and reports:
+
+- Hit@k: 1 if any gold evidence chunk appears in the top k, else 0.
+- Gold evidence Recall@k: fraction of the manually labelled gold chunk set found in the top k.
+- MRR: reciprocal rank of the first gold chunk, averaged across questions.
+
+It reports dense and hybrid results side by side. The smoke dataset is tiny, hand-authored and focused on retrieval engineering; it is not representative of arbitrary YouTube videos, does not measure generated-answer quality, and must not be used alone to claim production accuracy.
+
+## Build a meaningful dataset for a resume claim
+
+1. Select 8–10 videos with diverse topics, languages and transcript lengths that you are permitted to analyse.
+2. Write factual and paraphrased questions manually, and record one or more supporting chunk IDs/timestamp ranges.
+3. Include multi-passage questions, unanswerable questions, exact-term questions, Hindi/multilingual questions, and adversarial transcript instructions.
+4. Freeze the dataset before tuning settings. Do not use model-generated answers as the only ground truth.
+5. Compare dense-only and hybrid retrieval using the same questions and chunk IDs.
+6. Human-review whether each factual answer claim is supported by its cited passage. Count valid label IDs separately from semantic citation support.
+7. Record model IDs, embedding model, chunk size, overlap, top-k, date, data size, median/p95 latency and provider usage/cost where available.
+8. Re-run the same data after a code change and report failures as well as successes.
 
 ## Metrics
 
-- **Recall@k:** proportion of questions for which at least one gold evidence chunk appears in the top k retrieved chunks.
-- **MRR:** average reciprocal rank of the first gold evidence chunk.
-- **Citation support rate:** proportion of factual answer claims whose cited sources support the claim, judged by a human or a separately validated rubric.
-- **Abstention quality:** whether questions with no transcript evidence are correctly declined, and whether answerable questions are not declined unnecessarily.
-- **Latency:** measure transcript fetch, embedding/index build, retrieval and generation separately; report median and p95 after repeated runs.
-- **Cost:** record embedding and answer-model usage per indexed video and per question using provider usage data where available.
+- Retrieval: Hit@k, gold evidence Recall@k, MRR.
+- Citation support: fraction of answer claims with source passages that actually support them, human-rated with a defined rubric.
+- Abstention: correct refusal on unanswerable questions and unnecessary refusal rate on answerable questions.
+- Latency/cost: separately measure indexing, retrieval and generation.
+- Robustness: prompt-injection attempts, malformed source labels, no-caption cases, large transcripts, and rate-limit behavior.
 
-## Repeatable protocol
-
-1. Freeze the test questions and expected evidence before changing retrieval settings.
-2. Record model IDs, chunk size, overlap, top-k, test date, and dependency versions.
-3. Run the same dataset before and after a change.
-4. Review failures by type: retrieval miss, bad chunk boundary, ambiguous question, unsupported generation, missing citation, or unavailable captions.
-5. Report dataset size and measurement method with every metric. Never generalize from a tiny demo set to all YouTube videos.
-
-## Initial baseline
-
-The application currently uses overlapping timestamp-aware caption chunks, FAISS similarity search with top-k = 4, and Gemini for answer generation. No measured retrieval or answer-quality score is published yet.
-
-
-## Manual-transcript mode evaluation
-
-Include the same gold questions in both automatic-caption and pasted-transcript modes. Test both inline timestamped captions and plain text without timestamps. Verify that a timestamped source link points to the expected moment, and that an un-timestamped source is labelled as having no timestamp rather than receiving a misleading 00:00 citation.
+No representative end-to-end answer-quality benchmark is currently published. The API smoke tests use mocks and do not contact Google models.

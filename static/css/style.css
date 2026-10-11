@@ -395,3 +395,36 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .secondary-button:hover:not(:disabled) { border-color: rgba(172, 145, 255, .6); background: rgba(157, 130, 255, .17); }
 .secondary-button:disabled { opacity: .55; cursor: not-allowed; }
 .secondary-button.is-loading .button-spinner { display: inline-block; }
+
+
+/* Machine-checkable citation-label audit; deliberately distinguishes syntax
+   validation from semantic claim verification. */
+.citation-audit {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 11px 0 4px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .018);
+}
+.citation-audit-icon {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 900;
+}
+.citation-audit-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.citation-audit-copy strong { font-size: 10px; font-weight: 800; }
+.citation-audit-copy small { color: #8e91a8; font-size: 9px; line-height: 1.55; }
+.citation-audit.valid { border-color: rgba(131, 226, 200, .17); background: rgba(81, 176, 146, .045); }
+.citation-audit.valid .citation-audit-icon { color: var(--mint); background: rgba(131, 226, 200, .11); }
+.citation-audit.valid .citation-audit-copy strong { color: #b6e7d7; }
+.citation-audit.warning { border-color: rgba(255, 181, 115, .23); background: rgba(255, 181, 115, .045); }
+.citation-audit.warning .citation-audit-icon { color: #ffc27f; background: rgba(255, 181, 115, .11); }
+.citation-audit.warning .citation-audit-copy strong { color: #ffd09d; }

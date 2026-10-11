@@ -1,57 +1,66 @@
-# TubeGPT: interview guide
+# TubeGPT interview guide
 
-Use this as a learning guide, not as a script to memorize. Be able to open the code and explain each stage in your own words.
+Use this as a learning guide, not a script to memorize. Be able to open the implementation and explain each stage in your own words.
 
 ## 30-second explanation
 
-TubeGPT is a YouTube transcript question-answering app built with Flask and a retrieval-augmented generation pipeline. It fetches accessible captions, groups them into overlapping chunks while preserving timestamps, embeds the chunks into FAISS, and retrieves the top passages for each question. Gemini generates an answer constrained to the retrieved context, and the UI shows the source excerpts with links to the corresponding video times.
+TubeGPT is a YouTube transcript Q&A application built with Flask and a retrieval-augmented generation pipeline. It chunks captions with timestamps, embeds them in FAISS, combines vector retrieval with BM25 keyword ranking using Reciprocal Rank Fusion, and asks Gemini to answer from retrieved passages. The answer's source labels are programmatically checked, and users can open the transcript evidence at the corresponding video time.
 
 ## Two-minute explanation
 
-A video transcript can be too long to pass into every question prompt, so I first transform it into chunks and embed them. When the user asks a question, I embed the question in the same vector space and use FAISS similarity search to retrieve relevant chunks. I pass only those excerpts to the answer model rather than asking the model to answer from the whole internet. The retrieval results include each chunk's start and end time, so the frontend can show clickable evidence. The system prompt asks the model to cite source labels and admit when the transcript does not contain the answer. The cache keeps a small number of video indexes in process memory to avoid repeating index work during a session.
+A full transcript is usually too large and unfocused to include in every prompt. I split captions into bounded overlapping chunks and keep each chunk's time range. I embed the chunks and index them with FAISS. For each question, I retrieve dense candidates, rank the transcript corpus with BM25 so exact terms can surface, and combine both rankings using RRF. The selected passages are assigned source labels and sent to Gemini with instructions to answer only from those passages. After generation, I validate that each cited source label exists in the retrieved set; if labels are missing or invalid, the model gets one repair attempt. The UI renders the answer and clickable source cards so users can verify the transcript. The system remains a single-process MVP with an in-memory index cache, and retrieval/answer quality must be measured rather than assumed.
 
-## Important functions
+## Important implementation modules
 
-- extract_video_id: validates supported YouTube URL patterns and raw IDs.
-- build_timestamped_chunks: groups captions by character budget and retains a meaningful time interval.
-- _get_or_create_index: fetches captions, creates LangChain Documents, generates embeddings, builds FAISS, and applies an LRU cache limit.
-- _retrieve_sources: runs semantic similarity retrieval, removes duplicate chunk IDs, and formats stable source labels and timestamp links.
-- chat: validates the question, retrieves context, calls Gemini, and returns answer text plus structured sources.
+- rag_core.py: URL validation, timestamp parsing, chunk construction.
+- hybrid_retrieval.py: Unicode tokenization, BM25 and Reciprocal Rank Fusion.
+- citation_validation.py: source-label integrity check, not semantic entailment.
+- retrieval_metrics.py: Hit@k, gold evidence recall@k and reciprocal rank.
+- app.py: Flask API, index creation, source retrieval, Gemini call and bounded citation repair.
+- scripts/evaluate_retrieval.py: compare dense-only and hybrid retrieval on a manually labelled corpus.
 
-## Interview questions to practise
+## Interview questions
 
-### Why use RAG instead of putting the whole transcript into the model prompt?
-RAG retrieves a small set of passages related to each question. This can lower prompt size and make it easier to associate claims with the transcript evidence. Retrieval quality is a dependency: if the right passage is not retrieved, the answer may be incomplete.
+### Why use RAG instead of passing the full transcript?
 
-### Why overlap chunks?
-A key sentence can cross a chunk boundary. Overlap gives the retrieval step a chance to see that sentence with nearby context. Too much overlap creates redundant vectors and may fill top-k results with near-duplicate passages, so chunk size, overlap and top-k should be evaluated together.
+RAG selects a limited number of question-relevant passages. This can reduce prompt size and gives the answer a concrete evidence set. But a retrieval miss can still cause an incomplete answer; that is why the retriever needs evaluation.
 
-### Why preserve timestamps in metadata?
-A retrieved passage is more useful when a person can verify it. Metadata connects the result to a start/end time and lets the interface link back to the original video. The time range follows the caption boundary; it is not word-level alignment.
+### Why combine dense search and BM25?
 
-### What is stored in FAISS?
-FAISS stores vector representations and supports nearest-neighbour similarity search. In this demo, LangChain documents also carry the passage text and timestamp metadata. The index exists in process memory and is not durable.
+Dense embeddings can match semantically similar paraphrases. BM25 is good at surfacing exact words such as error codes, product names, acronyms and identifiers. Their raw scores have different scales, so I combine rank positions with Reciprocal Rank Fusion instead of adding the raw scores.
 
-### What happens when the transcript does not answer the question?
-The prompt explicitly instructs the model to say that the evidence is insufficient instead of using outside knowledge. This is a guardrail, not a mathematical guarantee. Evaluation with known answerable and unanswerable questions is necessary to measure how often the model follows it.
+### How does Reciprocal Rank Fusion work?
 
-### Is prompt injection solved?
-No. Transcript text is untrusted content and the prompt tells the model not to follow instructions embedded in it. This reduces risk but cannot prove immunity. A stronger production design would add adversarial tests, constrained output validation, separate trusted instructions from retrieved data, and monitor failures.
+Each document receives a contribution based on its rank in each list, commonly 1 divided by a rank constant plus its rank. Contributions from lists are added and the highest fused scores are returned. This is easy to reason about and avoids calibrating two different score distributions. The right retrieval strategy still has to be verified against a labelled dataset.
 
-### Why not show a confidence score?
-FAISS distance is not calibrated probability. A number labelled confidence would be misleading unless validated against a suitable dataset. This UI surfaces the retrieved excerpts so the person can inspect them.
+### Does citation validation prove the answer is true?
 
-### What are the current scalability limits?
-Indexes are in process memory and a restart clears them; multiple workers do not share the cache. Large indexing work can be slow and costly. A production architecture could persist vectors, enqueue indexing work, use a shared cache, add authentication/quotas, and instrument latency and failure rates. Those are future improvements, not current features.
+No. It only confirms that labels like S1 and S2 exist among the retrieved sources. A valid label can still point to irrelevant evidence. Semantic citation support needs manual evaluation or a separately validated entailment method.
 
-## Honest limitations to say out loud
+### Why repair the answer only once?
 
-- Transcript availability depends on YouTube and the video's caption settings.
-- RAG can retrieve irrelevant chunks or miss evidence; the project needs a repeatable evaluation set before any accuracy claim.
-- The cache is ephemeral and process-local.
-- The model provider may change model availability, latency and pricing.
-- The app is an educational MVP, not a production multi-tenant platform.
+A bounded retry can correct missing or unknown source labels without creating an unbounded loop that increases latency and model cost. If the second response still has invalid labels, the UI warns the user instead of claiming success.
 
+### How should the app handle transcript prompt injection?
 
-### Why provide a pasted-transcript fallback?
-The unofficial transcript endpoint can be blocked or rate-limited from some cloud IP addresses. A fallback lets users supply transcript content they can already access from their browser, then reuses the same chunking, embedding, retrieval and generation pipeline. It does not bypass caption access controls. When time codes are absent, the app must disclose that rather than invent timestamp citations.
+Transcript content is untrusted input, so the prompt separates it from instructions and tells the model to ignore any commands inside it. That mitigates some risks but cannot guarantee immunity. Adversarial tests and output validation are still needed.
+
+### Why preserve timestamps?
+
+The user can verify the returned passage in context. The timestamp is the chunk's approximate caption start time, not word-level alignment.
+
+### How do you evaluate retrieval?
+
+Use a manually labelled question set with the chunk IDs expected to contain supporting evidence. Compare dense-only versus hybrid rankings using Hit@k, gold evidence Recall@k and MRR. Measure answer factuality, citation support, abstention quality, latency and cost separately. The included dataset is a small smoke test; it is not enough for general performance claims.
+
+### What are the scaling limits?
+
+Indexes and rate-limit state are process-local. A restart clears them and multiple workers do not share the state. Indexing is synchronous. A production design could persist embeddings, move indexing to a job queue, use a shared cache, add authentication, quotas and telemetry.
+
+## Honest limitations
+
+- Automatic caption fetching may be blocked by YouTube; the UI supports user-pasted captions as a fallback.
+- The app uses external model calls and does not persist chat history.
+- Hybrid retrieval can underperform dense-only retrieval on some content; benchmark it.
+- The citation audit checks source-label integrity, not semantic proof.
+- The app is an educational MVP, not a production multi-tenant service.
